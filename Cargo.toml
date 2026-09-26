@@ -57,6 +57,7 @@ windows = { version = "0.62.2", features = [
 ] }
 windows-sys = { version = "0.61.2", features = [
     "Win32_Graphics_Gdi",
+    "Win32_Media",
     "Win32_System_Rpc",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
@@ -69,6 +70,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-core = { version = "0.62.2" }
+
+[target.'cfg(target_os="windows")'.dev-dependencies]
+# The expose regression test invalidates through the Win32 API directly, so that the operating
+# system -- not the test -- decides what a window-system repaint is.
+windows-sys = { version = "0.61.2", features = ["Win32_Graphics_Gdi"] }
 
 [target.'cfg(target_os="macos")'.dependencies]
 objc2 = "0.6.4"

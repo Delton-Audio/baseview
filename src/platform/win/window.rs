@@ -11,6 +11,9 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use windows_sys::Win32::Foundation::POINT;
 
 pub(crate) const BV_WINDOW_MUST_CLOSE: u32 = WM_USER + 1;
+/// A frame the handler asked for, as opposed to one the window system demands. Kept off
+/// `WM_PAINT` so that message means "our pixels were discarded" and nothing else.
+pub(crate) const BV_REQUEST_FRAME: u32 = WM_USER + 2;
 
 use super::drop_target::DropTarget;
 use super::*;
@@ -22,8 +25,8 @@ use crate::window::WindowInitializer;
 use crate::wrappers::win32::cursor::SystemCursor;
 use crate::wrappers::win32::window::*;
 use crate::wrappers::win32::{
-    ole_initialize, run_thread_message_loop_until, Dpi, DpiAwarenessGuard, LibraryModule, Rect,
-    WindowStyle,
+    monitor_frame_interval_ms, ole_initialize, run_thread_message_loop_until, Dpi,
+    DpiAwarenessGuard, LibraryModule, Rect, TimerResolution, WindowStyle,
 };
 use crate::{Event, MouseButton, MouseEvent, ScrollDelta, WindowEvent, WindowSize};
 
@@ -213,6 +216,9 @@ pub struct BaseviewWindow {
     // Things not directly used, but kept so their Drop impl runs when the window is destroyed
     _keyboard_hook: Cell<Option<hook::KeyboardHookHandle>>,
     _drop_target: Cell<Option<ComObject<DropTarget>>>,
+    /// Holds the raised multimedia timer resolution for this window's lifetime; dropping it
+    /// restores the system default.
+    _timer_resolution: Option<TimerResolution>,
 
     #[cfg(feature = "opengl")]
     pub gl_config: Option<crate::gl::GlConfig>,
@@ -220,10 +226,19 @@ pub struct BaseviewWindow {
 
 impl BaseviewWindow {
     pub fn create(shared_state: Rc<WindowSharedState>, init: WindowInitializer) -> Result<HWnd> {
+        let popup_position = shared_state.popup_position.get();
         shared_state.init(&init);
 
-        let style = WindowStyle::from_settings(&init.settings);
-        let parent = init.settings.parent.map(|p| p.inner.handle);
+        let style = if popup_position.is_some() {
+            WindowStyle::popup()
+        } else {
+            WindowStyle::from_settings(&init.settings)
+        };
+        let parent = if popup_position.is_some() {
+            None
+        } else {
+            init.settings.parent.map(|p| p.inner.handle)
+        };
 
         let dpi_ctx =
             DpiAwarenessGuard::new(&shared_state.user32, shared_state.dpi_scaling_strategy.get())?;
@@ -250,6 +265,10 @@ impl BaseviewWindow {
 
                     _drop_target: None.into(),
                     _keyboard_hook: None.into(),
+                    // Raise the timer resolution for as long as this window lives, so the frame
+                    // timer below is actually paced at the interval we ask for rather than being
+                    // rounded up to the ~15.6 ms system tick.
+                    _timer_resolution: TimerResolution::begin(1).ok(),
 
                     #[cfg(feature = "opengl")]
                     gl_config: init.settings.gl_config,
@@ -259,14 +278,26 @@ impl BaseviewWindow {
 
         let rect = dpi_ctx.client_area_to_nc_area(window_size.into(), style, None)?;
         let title = HSTRING::from(init.settings.title);
-        let window = create_window(&title, style, rect.size(), parent, &dpi_ctx, initializer)?;
+        let window = create_window(
+            &title,
+            style,
+            popup_position.unwrap_or(PhysicalPosition::new(0, 0)),
+            rect.size(),
+            parent,
+            &dpi_ctx,
+            initializer,
+        )?;
 
         // FIXME: this SetTimer call could be in after_create, but for some reason it changes the ordering
         // for a parent+child window situation, which results in the parent drawing over the child.
         // This timer should be replaced by proper window redrawing/damage/vsync handling, but this
         // would be a breaking change, so we'll do that later.
         // TODO: create a new timer instead of hard-coding a specific ID
-        window.set_timer(WIN_FRAME_TIMER, 15)?;
+        //
+        // Pace the timer to the monitor's refresh rate rather than a fixed 15 ms, which pinned the
+        // frame rate to ~64 fps regardless of the display. Note that `SetTimer` clamps to a 10 ms
+        // minimum, so this raises the ceiling to ~100 fps.
+        window.set_timer(WIN_FRAME_TIMER, monitor_frame_interval_ms())?;
 
         Ok(window)
     }
@@ -483,6 +514,11 @@ unsafe fn wnd_proc_inner(
             if let Some(button) = button {
                 let event = match msg {
                     WM_LBUTTONDOWN | WM_MBUTTONDOWN | WM_RBUTTONDOWN | WM_XBUTTONDOWN => {
+                        // Take keyboard focus on click. Without this a parented plugin editor
+                        // never receives keyboard input, because the host's window keeps focus
+                        // when the user clicks into the editor.
+                        let _ = window.set_focus();
+
                         // Capture the mouse cursor on button down
                         mouse_button_counter = mouse_button_counter.saturating_add(1);
                         window.set_capture();
@@ -527,6 +563,27 @@ unsafe fn wnd_proc_inner(
 
             Some(0)
         }
+        WM_PAINT => {
+            // `WM_PAINT` means exactly one thing: the window system invalidated our pixels --
+            // uncovered, revealed, dragged across a screen edge, or otherwise discarded. Frames the
+            // handler asks for arrive on `BV_REQUEST_FRAME`, so there is nothing to disambiguate
+            // here and no way for real damage to be mistaken for a self-request and dropped.
+            //
+            // Validated before the handler runs: this damage is about to be repainted, and a
+            // re-invalidation caused from inside `on_frame` must survive to chain the next one.
+            let _ = window.validate();
+
+            // Reported BEFORE the frame, so a handler that paints only when something changed can
+            // mark itself dirty and have this very frame restore the screen. This is the only
+            // report a parented window gets that its pixels are gone: it is a child window, so it
+            // receives no focus event when its host is activated, and there is no other damage
+            // message.
+            window_bv.handle_event(Event::Window(WindowEvent::Expose));
+
+            window_bv.handle_on_frame();
+
+            Some(0)
+        }
         WM_CLOSE => {
             window_bv.handle_event(Event::Window(WindowEvent::WillClose));
 
@@ -558,6 +615,13 @@ unsafe fn wnd_proc_inner(
         }
         WM_KILLFOCUS => {
             window_bv.handle_event(Event::Window(WindowEvent::Unfocused));
+
+            // A popup dismisses itself the moment it loses focus -- that is, as soon as the user
+            // interacts anywhere outside it. Requested rather than destroyed directly so the
+            // close still runs after the handler returns.
+            if window_state.shared.popup_position.get().is_some() {
+                window_state.request_close();
+            }
 
             None
         }
@@ -722,6 +786,24 @@ unsafe fn wnd_proc_inner(
             let _ = window.destroy();
             Some(0)
         }
+        BV_REQUEST_FRAME => {
+            // Stood down AFTER the handler, which is deliberate and is what keeps a posted frame
+            // request from starving input.
+            //
+            // Posted messages outrank hardware input in the message queue. A handler that asks for
+            // a frame from inside `on_frame` -- which is how an animating scene keeps going -- would
+            // therefore re-post faster than the queue drains and the mouse would never get a turn.
+            // Holding the flag up across the handler swallows that self-chaining request, so at most
+            // one `BV_REQUEST_FRAME` is ever in flight. Continuation falls to `WIN_FRAME_TIMER`,
+            // which already ticks `on_frame` at the monitor rate and, as a timer, sits at the BOTTOM
+            // of the queue where a render loop belongs.
+            //
+            // `request_frame` therefore buys latency, not cadence: a frame promptly after an input
+            // event, rather than a faster loop.
+            window_bv.handle_on_frame();
+            window_state.frame_requested.set(false);
+            Some(0)
+        }
         _ => None,
     }
 }
@@ -741,6 +823,25 @@ impl WindowHandle {
         }
 
         let window = BaseviewWindow::create(Rc::clone(&shared_state), init)?;
+
+        Ok(WindowHandle { hwnd: Some(window).into(), state: shared_state, init: None.into() })
+    }
+
+    pub fn create_popup(
+        mut init: WindowInitializer, position: PhysicalPosition<i32>,
+    ) -> Result<WindowHandle> {
+        init.settings.parent = None;
+        init.settings.wait_for_parent = false;
+        let extended_user_32 = LibraryModule::load()?;
+        let shared_state = WindowSharedState::new(extended_user_32, &init.settings);
+        shared_state.popup_position.set(Some(position));
+        let window = BaseviewWindow::create(Rc::clone(&shared_state), init)?;
+
+        // A popup takes the foreground and keyboard focus, so that the first interaction *outside*
+        // it produces the `WM_KILLFOCUS` that dismisses it.
+        window.set_foreground();
+        let _ = window.set_focus();
+        window.show_and_activate();
 
         Ok(WindowHandle { hwnd: Some(window).into(), state: shared_state, init: None.into() })
     }

@@ -12,7 +12,7 @@ mod wgl;
 #[cfg(feature = "opengl")]
 pub use wgl::*;
 
-use crate::dpi::PhysicalSize;
+use crate::dpi::{PhysicalPosition, PhysicalSize};
 pub use data::WindowData;
 pub use handle::HWnd;
 pub use proc::wnd_proc;
@@ -66,8 +66,9 @@ pub trait WindowImpl: 'static {
 /// For any non-trivial operations (e.g. window resizing, GL context creation, etc.), put them in
 /// [`WindowImpl::after_create`] instead.
 pub fn create_window<W: WindowImpl>(
-    title: &HSTRING, style: WindowStyle, nc_size: PhysicalSize<u32>, parent: Option<HWnd>,
-    _dpi_ctx: &DpiAwarenessGuard, initializer: impl FnOnce(HWnd) -> W + 'static,
+    title: &HSTRING, style: WindowStyle, position: PhysicalPosition<i32>,
+    nc_size: PhysicalSize<u32>, parent: Option<HWnd>, _dpi_ctx: &DpiAwarenessGuard,
+    initializer: impl FnOnce(HWnd) -> W + 'static,
 ) -> Result<HWnd> {
     let instance = HInstance::get_from_dll();
     let window_class = RegisteredClass::register_new(instance, Some(wnd_proc::<W>))?;
@@ -80,8 +81,8 @@ pub fn create_window<W: WindowImpl>(
             window_class.as_atom_ptr(),
             title.as_ptr(),
             style.style,
-            0,
-            0,
+            position.x,
+            position.y,
             nc_size.width.try_into().unwrap_or(i32::MAX),
             nc_size.height.try_into().unwrap_or(i32::MAX),
             parent.map(|p| p.as_raw()).unwrap_or(null_mut()),

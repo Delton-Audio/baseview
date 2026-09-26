@@ -24,4 +24,17 @@ impl WindowStyle {
 
         style
     }
+
+    /// A borderless top-level window for transient menus and pickers.
+    ///
+    /// Unlike the top-level style from [`from_settings`](Self::from_settings) it has no caption,
+    /// border or sizing frame, so its window rect equals its client rect and it needs no
+    /// non-client area adjustment. The extended style keeps it off the taskbar and above the
+    /// window it was opened from.
+    pub const fn popup() -> Self {
+        Self {
+            style: WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS,
+            style_ex: WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        }
+    }
 }

@@ -85,6 +85,39 @@ impl Window {
         })
     }
 
+    /// Creates a borderless top-level popup window at the given screen position, in physical
+    /// pixels, and shows it immediately.
+    ///
+    /// The popup takes the foreground and keyboard focus, and dismisses itself as soon as it loses
+    /// focus -- that is, as soon as the user interacts anywhere outside it. After that,
+    /// [`is_open`](Self::is_open) returns `false`. Intended for transient menus and pickers that
+    /// may need to overflow the bounds of the window they were opened from.
+    ///
+    /// Unlike [`create`](Self::create), there is no need to call [`show`](Self::show).
+    /// `settings.parent` and `settings.wait_for_parent` are ignored: a popup is always a top-level
+    /// window. Dropping the returned [`Window`] closes the popup, like any other window.
+    ///
+    /// This does not block. The popup's messages are pumped by whoever pumps this thread's message
+    /// queue, which inside a plugin is the host.
+    ///
+    /// Currently only implemented on Windows.
+    #[cfg(target_os = "windows")]
+    pub fn create_popup<H: WindowHandler>(
+        position: PhysicalPosition<i32>, settings: WindowSettings,
+        handler: impl FnOnce(WindowContext) -> Result<H, HandlerError> + Send + 'static,
+    ) -> Result<Window, Error> {
+        let initializer = WindowInitializer {
+            settings,
+            builder: WindowHandlerBuilder::new(handler),
+            host: Host::default(),
+        };
+
+        Ok(Self {
+            inner: platform::WindowHandle::create_popup(initializer, position)?,
+            phantom: PhantomData,
+        })
+    }
+
     /// Blocks the thread and runs an event loop until the window is closed.
     ///
     /// The window is shown automatically if it wasn't already.

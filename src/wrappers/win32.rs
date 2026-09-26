@@ -1,5 +1,6 @@
 pub mod cursor;
 mod dpi;
+mod frame_pacing;
 pub mod h_instance;
 mod library;
 mod rect;
@@ -10,6 +11,7 @@ pub mod uuid;
 pub mod window;
 
 pub use dpi::*;
+pub use frame_pacing::*;
 pub use library::*;
 pub use rect::Rect;
 pub use shcore::*;

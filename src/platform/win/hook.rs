@@ -2,8 +2,9 @@
 
 use std::{
     collections::HashSet,
-    ffi::c_int,
+    ffi::{c_int, c_void},
     ptr,
+    ptr::NonNull,
     sync::{LazyLock, RwLock},
 };
 
@@ -18,7 +19,7 @@ use windows_sys::Win32::{
 };
 
 use super::*;
-use crate::wrappers::win32::window::wnd_proc;
+use crate::wrappers::win32::window::{wnd_proc, HWnd};
 
 // track all windows opened by this instance of baseview
 // we use an RwLock here since the vast majority of uses (event interceptions)
@@ -129,12 +130,39 @@ unsafe fn offer_message_to_baseview(msg: *mut MSG) -> bool {
         _ => return false,
     }
 
-    // check if this is one of our windows. if so, intercept it
-    if HOOK_STATE.read().unwrap().open_windows.contains(&HWNDWrapper(msg.hwnd)) {
+    let state = HOOK_STATE.read().unwrap();
+
+    // Prefer the focused window when it is one of ours. For a parented plugin editor the message
+    // is usually addressed to the host's window while our child window holds focus and is the real
+    // target, so routing purely by `msg.hwnd` would drop the keyboard input on the floor.
+    let focused = HWnd::get_focused_window();
+    if state.open_windows.contains(&HWNDWrapper(focused)) && has_window_data(focused) {
+        drop(state);
+        let _ = wnd_proc::<BaseviewWindow>(focused, msg.message, msg.wParam, msg.lParam);
+
+        return true;
+    }
+
+    // Otherwise fall back to the window the message was actually addressed to.
+    if state.open_windows.contains(&HWNDWrapper(msg.hwnd)) && has_window_data(msg.hwnd) {
+        drop(state);
         let _ = wnd_proc::<BaseviewWindow>(msg.hwnd, msg.message, msg.wParam, msg.lParam);
 
         return true;
     }
 
     false
+}
+
+/// Whether a window still has its state attached.
+///
+/// A window can linger in `open_windows` briefly after its state has been torn down. Dispatching
+/// into `wnd_proc` during that gap would operate on freed state, so both routes above check this
+/// first.
+unsafe fn has_window_data(hwnd: HWND) -> bool {
+    let Some(hwnd) = NonNull::new(hwnd) else { return false };
+
+    // SAFETY: the handle is non-null, and is only ever one this hook recorded when the window was
+    // created.
+    unsafe { HWnd::from_raw(hwnd).get_userdata_ptr::<c_void>().is_some() }
 }

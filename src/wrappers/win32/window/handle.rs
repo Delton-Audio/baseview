@@ -5,12 +5,12 @@ use crate::wrappers::win32::user32::ExtendedUser32;
 use crate::wrappers::win32::{DpiAwarenessContext, ExtendedShCore, Rect};
 use std::ffi::c_void;
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::ptr::{null_mut, NonNull};
+use std::ptr::{null, null_mut, NonNull};
 use windows::Win32::System::Ole::IDropTarget;
 use windows_core::{Error, Interface, InterfaceRef, Result, HRESULT};
 use windows_sys::Win32::Foundation::{SetLastError, FALSE, HWND, POINT, S_OK};
 use windows_sys::Win32::Graphics::Gdi::{
-    MonitorFromWindow, ScreenToClient, MONITOR_DEFAULTTOPRIMARY,
+    MonitorFromWindow, ScreenToClient, ValidateRect, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows_sys::Win32::System::Ole::{RegisterDragDrop, RevokeDragDrop};
 use windows_sys::Win32::UI::HiDpi::{DPI_HOSTING_BEHAVIOR_MIXED, MDT_DEFAULT};
@@ -18,9 +18,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetWindowLongPtrW, GetWindowLongW, SetParent, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_LONG_PTR_INDEX,
+    DestroyWindow, GetWindowLongPtrW, GetWindowLongW, SetForegroundWindow, SetParent, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_LONG_PTR_INDEX,
 };
 
 /// A simple wrapper around a HWND.
@@ -240,6 +240,32 @@ impl HWnd {
         }
 
         Err(error)
+    }
+
+    /// Clears the pending repaint region without painting.
+    ///
+    /// Used at the top of a `WM_PAINT` handler so that a repaint requested from *within* that
+    /// handler survives and chains the next frame, rather than being cleared by the paint that is
+    /// already in progress.
+    pub fn validate(&self) -> Result<()> {
+        // SAFETY: This type guarantees the HWND is safe to use. A NULL rect means the entire
+        // client area.
+        let result = unsafe { ValidateRect(self.as_raw(), null()) };
+
+        if result == 0 {
+            return Err(Error::from_thread());
+        }
+
+        Ok(())
+    }
+
+    /// Brings this window to the foreground and gives it keyboard focus.
+    ///
+    /// Returns `false` if the system refused, which Win32 permits when the calling process does
+    /// not own the current foreground window.
+    pub fn set_foreground(&self) -> bool {
+        // SAFETY: This type guarantees the HWND is safe to use.
+        unsafe { SetForegroundWindow(self.as_raw()) != 0 }
     }
 
     pub fn destroy(&self) -> Result<()> {

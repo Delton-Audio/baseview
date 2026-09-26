@@ -54,6 +54,23 @@ impl WindowContext {
         Ok(())
     }
 
+    /// Requests one more frame promptly, ahead of the next tick of baseview's internal timer.
+    ///
+    /// This buys LATENCY, not cadence -- a frame right after an input event rather than up to one
+    /// timer interval later. It is not a way to outrun the timer: a request made from inside
+    /// `on_frame` is deliberately swallowed, because servicing it would re-post faster than the
+    /// message queue drains and starve mouse and keyboard input. Continuing cadence is the timer's
+    /// job, and it already ticks at the monitor's refresh rate.
+    ///
+    /// The request coalesces, so calling this repeatedly before the next frame is delivered is
+    /// harmless.
+    ///
+    /// Currently a no-op on platforms other than Windows, which keep their existing frame cadence.
+    pub fn request_frame(&self) {
+        #[cfg(target_os = "windows")]
+        self.inner.request_frame();
+    }
+
     /// Returns the current scale factor of this window.
     pub fn scale_factor(&self) -> f64 {
         self.inner.scale_factor()

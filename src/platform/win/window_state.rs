@@ -1,4 +1,4 @@
-use crate::dpi::{PhysicalSize, Size};
+use crate::dpi::{PhysicalPosition, PhysicalSize, Size};
 use crate::platform::win::dpi::DpiScalingStrategy;
 use crate::platform::win::keyboard::KeyboardState;
 use crate::platform::PlatformHandle;
@@ -24,6 +24,13 @@ pub(crate) struct WindowState {
     pub mouse_button_counter: Cell<usize>,
     pub mouse_was_outside_window: Cell<bool>,
     pub cursor_icon: Cell<MouseCursor>,
+    /// Whether a `BV_REQUEST_FRAME` is posted and not yet serviced.
+    ///
+    /// Purely a de-duplicator: `request_frame` is called from `on_frame` itself, so an animating
+    /// handler would post one message per frame faster than the loop drains them. It is NOT a way
+    /// to tell a requested frame from an operating-system repaint -- the two travel on different
+    /// messages precisely so that nothing has to guess.
+    pub frame_requested: Cell<bool>,
 
     pub user32: LibraryModule<ExtendedUser32>,
     pub shared: Rc<WindowSharedState>,
@@ -42,6 +49,7 @@ impl WindowState {
             mouse_button_counter: Cell::new(0),
             mouse_was_outside_window: true.into(),
             cursor_icon: Cell::new(MouseCursor::Default),
+            frame_requested: Cell::new(false),
             user32,
             shared,
 
@@ -82,6 +90,31 @@ impl WindowState {
     pub fn focus(&self) -> Result<(), super::PlatformError> {
         self.hwnd.set_focus()?;
         Ok(())
+    }
+
+    /// Asks for one more `on_frame` as soon as the message loop can deliver it.
+    ///
+    /// Posted on its own message rather than implemented with `InvalidateRect`, so that `WM_PAINT`
+    /// keeps exactly one meaning: the window system invalidated us. When the two shared
+    /// `InvalidateRect` they arrived coalesced on a single indistinguishable `WM_PAINT`, and the
+    /// tie had to be broken by guessing -- which silently dropped real damage whenever a handler
+    /// asked for a frame it then decided not to paint.
+    pub fn request_frame(&self) {
+        // One posted frame is as good as ten, and `on_frame` itself calls this.
+        if self.frame_requested.replace(true) {
+            return;
+        }
+
+        // SAFETY: posting to a window handle this state owns.
+        let posted = unsafe {
+            PostMessageW(self.hwnd.as_raw(), crate::platform::win::window::BV_REQUEST_FRAME, 0, 0)
+        };
+        if posted == 0 {
+            // The post failed -- a full queue, or a window on its way out. Stand the flag back
+            // down so a later request is not swallowed as a duplicate of a message that never
+            // existed. A dropped frame request is not actionable by the caller beyond that.
+            self.frame_requested.set(false);
+        }
     }
 
     pub fn resize(&self, size: Size) -> Result<(), super::PlatformError> {
@@ -130,6 +163,9 @@ impl WindowState {
 
 pub struct WindowSharedState {
     pub parented: Cell<bool>,
+    /// `Some` for a borderless top-level popup (see `Window::create_popup`), holding its screen
+    /// position in physical pixels. A popup dismisses itself as soon as it loses focus.
+    pub popup_position: Cell<Option<PhysicalPosition<i32>>>,
     pub is_alive: Cell<bool>,
     pub current_size: Cell<PhysicalSize<u32>>,
     pub current_dpi: Cell<Option<Dpi>>, // None if Win32 HiDPI isn't supported
@@ -146,6 +182,7 @@ impl WindowSharedState {
     pub fn new(user32: LibraryModule<ExtendedUser32>, settings: &WindowSettings) -> Rc<Self> {
         Self {
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
+            popup_position: None.into(),
             is_alive: true.into(),
             current_dpi: None.into(),
             current_size: settings.size.to_physical(1.0).into(),

@@ -115,6 +115,22 @@ pub enum WindowEvent {
     Focused,
     Unfocused,
     WillClose,
+    /// The window system discarded some of this window's pixels and wants them back -- the window
+    /// was uncovered, revealed by another window moving away, or otherwise invalidated from
+    /// outside.
+    ///
+    /// A handler that repaints unconditionally can ignore this. One that skips painting when its
+    /// own state has not changed **must** treat it as a reason to repaint anyway: the content is
+    /// unchanged, but the screen no longer shows it, and no other event reports that. Focus does
+    /// not substitute -- a parented (plugin editor) window is a child window and does not receive
+    /// focus when its host is activated.
+    ///
+    /// Only emitted for invalidation the window system originated. A frame the handler asked for
+    /// through `WindowContext::request_frame` travels on its own platform message and never
+    /// produces this event, so treating every `Expose` as a reason to repaint cannot drive a loop.
+    ///
+    /// Currently only emitted on Windows.
+    Expose,
 }
 
 #[derive(Debug, Clone)]
