@@ -13,7 +13,7 @@ use windows_sys::Win32::{
     System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
     UI::WindowsAndMessaging::{
         CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, HHOOK, MSG, PM_REMOVE,
-        WH_GETMESSAGE, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        TranslateMessage, WH_GETMESSAGE, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
         WM_USER,
     },
 };
@@ -118,6 +118,22 @@ unsafe extern "system" fn keyboard_hook_callback(
     }
 }
 
+/// Posts `WM_CHAR` / `WM_DEADCHAR` for a `WM_KEYDOWN` into the target window's queue.
+///
+/// This hook replaces the key-down before the host's own message loop can run `TranslateMessage`
+/// on it, so without this call Windows never produces the character: no Caps Lock, no dead keys,
+/// no AltGr text. Translating a copy addressed to the window that will receive the key lets
+/// `is_last_message` find the `WM_CHAR` and report the key-down once, by the char.
+/// `WM_SYSKEYDOWN` is deliberately not translated (no `WM_SYSCHAR` text).
+unsafe fn translate_key_down(msg: &MSG, target: HWND) {
+    if msg.message == WM_KEYDOWN {
+        let mut copy = *msg;
+        copy.hwnd = target;
+        // SAFETY: `copy` is a valid, initialised MSG.
+        unsafe { TranslateMessage(&copy) };
+    }
+}
+
 // check if `msg` is a keyboard message addressed to a window
 // in KeyboardHookState::open_windows, and intercept it if so
 unsafe fn offer_message_to_baseview(msg: *mut MSG) -> bool {
@@ -138,6 +154,7 @@ unsafe fn offer_message_to_baseview(msg: *mut MSG) -> bool {
     let focused = HWnd::get_focused_window();
     if state.open_windows.contains(&HWNDWrapper(focused)) && has_window_data(focused) {
         drop(state);
+        translate_key_down(msg, focused);
         let _ = wnd_proc::<BaseviewWindow>(focused, msg.message, msg.wParam, msg.lParam);
 
         return true;
@@ -146,6 +163,7 @@ unsafe fn offer_message_to_baseview(msg: *mut MSG) -> bool {
     // Otherwise fall back to the window the message was actually addressed to.
     if state.open_windows.contains(&HWNDWrapper(msg.hwnd)) && has_window_data(msg.hwnd) {
         drop(state);
+        translate_key_down(msg, msg.hwnd);
         let _ = wnd_proc::<BaseviewWindow>(msg.hwnd, msg.message, msg.wParam, msg.lParam);
 
         return true;
