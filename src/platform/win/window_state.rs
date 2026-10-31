@@ -164,8 +164,11 @@ impl WindowState {
 pub struct WindowSharedState {
     pub parented: Cell<bool>,
     /// `Some` for a borderless top-level popup (see `Window::create_popup`), holding its screen
-    /// position in physical pixels. A popup dismisses itself as soon as it loses focus.
+    /// position in physical pixels. A popup that is not owned dismisses itself as soon as it loses focus.
     pub popup_position: Cell<Option<PhysicalPosition<i32>>>,
+    /// `Some` for an owned popup (see `Window::create_owned_popup`): the window that owns it. An
+    /// owned popup never takes activation or focus, so it never dismisses itself on focus loss.
+    pub popup_owner: Cell<Option<HWnd>>,
     pub is_alive: Cell<bool>,
     pub current_size: Cell<PhysicalSize<u32>>,
     pub current_dpi: Cell<Option<Dpi>>, // None if Win32 HiDPI isn't supported
@@ -183,6 +186,7 @@ impl WindowSharedState {
         Self {
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
             popup_position: None.into(),
+            popup_owner: None.into(),
             is_alive: true.into(),
             current_dpi: None.into(),
             current_size: settings.size.to_physical(1.0).into(),

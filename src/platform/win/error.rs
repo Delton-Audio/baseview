@@ -7,6 +7,7 @@ pub type Result<T> = std::result::Result<T, PlatformError>;
 pub enum PlatformError {
     Win32(windows_core::Error),
     ResizeFailed,
+    OwnerClosed,
     Handler(HandlerError),
 }
 
@@ -28,6 +29,7 @@ impl Display for PlatformError {
             PlatformError::Win32(e) => Display::fmt(e, f),
             PlatformError::Handler(e) => Display::fmt(e, f),
             PlatformError::ResizeFailed => f.write_str("Window resize request failed."),
+            PlatformError::OwnerClosed => f.write_str("The popup's owner window is not open."),
         }
     }
 }

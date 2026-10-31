@@ -227,15 +227,20 @@ pub struct BaseviewWindow {
 impl BaseviewWindow {
     pub fn create(shared_state: Rc<WindowSharedState>, init: WindowInitializer) -> Result<HWnd> {
         let popup_position = shared_state.popup_position.get();
+        let popup_owner = shared_state.popup_owner.get();
         shared_state.init(&init);
 
         let style = if popup_position.is_some() {
-            WindowStyle::popup()
+            if popup_owner.is_some() {
+                WindowStyle::owned_popup()
+            } else {
+                WindowStyle::popup()
+            }
         } else {
             WindowStyle::from_settings(&init.settings)
         };
         let parent = if popup_position.is_some() {
-            None
+            popup_owner
         } else {
             init.settings.parent.map(|p| p.inner.handle)
         };
@@ -383,7 +388,14 @@ impl WindowImpl for BaseviewWindow {
                     &window_state.shared.user32,
                     self.shared_state.dpi_scaling_strategy.get(),
                 )?;
-                window.resize_and_activate(new_size, Some(dpi), &guard)?;
+                if window_state.shared.popup_owner.get().is_some() {
+                    // DPI correction during creation must not steal focus from the owner.
+                    let style = window.get_style()?;
+                    let rect = guard.client_area_to_nc_area(new_size.into(), style, Some(dpi))?;
+                    window.resize_nc_without_activating(rect.size())?;
+                } else {
+                    window.resize_and_activate(new_size, Some(dpi), &guard)?;
+                }
             }
         }
 
@@ -517,7 +529,9 @@ unsafe fn wnd_proc_inner(
                         // Take keyboard focus on click. Without this a parented plugin editor
                         // never receives keyboard input, because the host's window keeps focus
                         // when the user clicks into the editor.
-                        let _ = window.set_focus();
+                        if window_state.shared.popup_owner.get().is_none() {
+                            let _ = window.set_focus();
+                        }
 
                         // Capture the mouse cursor on button down
                         mouse_button_counter = mouse_button_counter.saturating_add(1);
@@ -616,14 +630,23 @@ unsafe fn wnd_proc_inner(
         WM_KILLFOCUS => {
             window_bv.handle_event(Event::Window(WindowEvent::Unfocused));
 
-            // A popup dismisses itself the moment it loses focus -- that is, as soon as the user
-            // interacts anywhere outside it. Requested rather than destroyed directly so the
-            // close still runs after the handler returns.
-            if window_state.shared.popup_position.get().is_some() {
+            // A popup that is not owned dismisses itself the moment it loses focus -- that is,
+            // as soon as the user interacts anywhere outside it. Requested rather than destroyed
+            // directly so the close still runs after the handler returns.
+            if window_state.shared.popup_position.get().is_some()
+                && window_state.shared.popup_owner.get().is_none()
+            {
                 window_state.request_close();
             }
 
             None
+        }
+        WM_MOUSEACTIVATE => {
+            if window_state.shared.popup_owner.get().is_some() {
+                Some(MA_NOACTIVATE as LRESULT)
+            } else {
+                None
+            }
         }
         WM_SIZE => {
             let width = (lparam & 0xFFFF) as u16 as u32;
@@ -842,6 +865,29 @@ impl WindowHandle {
         window.set_foreground();
         let _ = window.set_focus();
         window.show_and_activate();
+
+        Ok(WindowHandle { hwnd: Some(window).into(), state: shared_state, init: None.into() })
+    }
+
+    pub fn create_owned_popup(
+        mut init: WindowInitializer, position: PhysicalPosition<i32>, owner: &WindowHandle,
+    ) -> Result<WindowHandle> {
+        if !owner.is_open() {
+            return Err(PlatformError::OwnerClosed);
+        }
+        let Some(owner_hwnd) = owner.hwnd.get() else {
+            return Err(PlatformError::OwnerClosed);
+        };
+
+        init.settings.parent = None;
+        init.settings.wait_for_parent = false;
+        let extended_user_32 = LibraryModule::load()?;
+        let shared_state = WindowSharedState::new(extended_user_32, &init.settings);
+        shared_state.popup_position.set(Some(position));
+        shared_state.popup_owner.set(Some(owner_hwnd));
+        let window = BaseviewWindow::create(Rc::clone(&shared_state), init)?;
+
+        window.show_without_activating();
 
         Ok(WindowHandle { hwnd: Some(window).into(), state: shared_state, init: None.into() })
     }

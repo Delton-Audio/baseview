@@ -118,6 +118,40 @@ impl Window {
         })
     }
 
+    /// Creates a borderless popup OWNED by `owner`, at the given screen position in physical pixels,
+    /// and shows it immediately WITHOUT activating it.
+    ///
+    /// For the windows of a popup chain (a submenu opened from a menu). Windows keeps an owned window
+    /// above its owner and destroys it, before the owner, when the owner is destroyed, so closing the
+    /// first popup of a chain closes every popup it owns.
+    ///
+    /// An owned popup never takes activation or keyboard focus, not even when clicked: focus stays
+    /// where it was (normally on the chain's first popup, made with [`create_popup`](Self::create_popup)).
+    /// So it never dismisses itself on focus loss; the chain's first popup keeps that rule, and its
+    /// closing takes the owned popups with it. Keyboard input goes to the focused window, not here.
+    ///
+    /// `owner` is usually a popup, and may itself be an owned popup (a chain of any depth).
+    /// Fails if `owner` is not open. `settings.parent` and `settings.wait_for_parent` are ignored.
+    /// Dropping the returned [`Window`] closes this popup (and any popup it owns), not its owner.
+    ///
+    /// Currently only implemented on Windows.
+    #[cfg(target_os = "windows")]
+    pub fn create_owned_popup<H: WindowHandler>(
+        owner: &Window, position: PhysicalPosition<i32>, settings: WindowSettings,
+        handler: impl FnOnce(WindowContext) -> Result<H, HandlerError> + Send + 'static,
+    ) -> Result<Window, Error> {
+        let initializer = WindowInitializer {
+            settings,
+            builder: WindowHandlerBuilder::new(handler),
+            host: Host::default(),
+        };
+
+        Ok(Self {
+            inner: platform::WindowHandle::create_owned_popup(initializer, position, &owner.inner)?,
+            phantom: PhantomData,
+        })
+    }
+
     /// Blocks the thread and runs an event loop until the window is closed.
     ///
     /// The window is shown automatically if it wasn't already.

@@ -20,7 +20,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, GetWindowLongPtrW, GetWindowLongW, SetForegroundWindow, SetParent, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_LONG_PTR_INDEX,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+    WINDOW_LONG_PTR_INDEX,
 };
 
 /// A simple wrapper around a HWND.
@@ -172,6 +173,27 @@ impl HWnd {
         Ok(())
     }
 
+    /// Resizes without moving, changing the z-order, or activating the window.
+    pub fn resize_nc_without_activating(&self, size: PhysicalSize<u32>) -> Result<()> {
+        let result = unsafe {
+            SetWindowPos(
+                self.as_raw(),
+                null_mut(), // Ignored by SWP_NOZORDER
+                0,          // Ignored by SWP_NOMOVE
+                0,          // Ignored by SWP_NOMOVE
+                size.width.try_into().unwrap_or(i32::MAX),
+                size.height.try_into().unwrap_or(i32::MAX),
+                SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE,
+            )
+        };
+
+        if result == 0 {
+            return Err(Error::from_thread());
+        }
+
+        Ok(())
+    }
+
     pub fn resize_and_activate(
         &self, client_size: PhysicalSize<u32>, window_dpi: Option<Dpi>, dpi_ctx: &DpiAwarenessGuard,
     ) -> Result<()> {
@@ -186,6 +208,14 @@ impl HWnd {
     /// Returns true if the window was previously visible, false otherwise.
     pub fn show_and_activate(&self) -> bool {
         let result = unsafe { ShowWindow(self.as_raw(), SW_SHOW) };
+
+        result != 0
+    }
+
+    /// Shows the window without activating it (`SW_SHOWNOACTIVATE`). Returns true if the window was
+    /// previously visible.
+    pub fn show_without_activating(&self) -> bool {
+        let result = unsafe { ShowWindow(self.as_raw(), SW_SHOWNOACTIVATE) };
 
         result != 0
     }

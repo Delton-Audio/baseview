@@ -37,4 +37,13 @@ impl WindowStyle {
             style_ex: WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         }
     }
+
+    /// A borderless popup that is never activated: [`popup`](Self::popup) plus
+    /// `WS_EX_NOACTIVATE`, and without `WS_VISIBLE`, so it is shown explicitly without activation.
+    pub const fn owned_popup() -> Self {
+        Self {
+            style: WS_POPUP | WS_CLIPSIBLINGS,
+            style_ex: WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+        }
+    }
 }
