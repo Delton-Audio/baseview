@@ -24,6 +24,7 @@ mod visibility_tree;
 mod window_shared;
 mod window_thread;
 
+pub use cursor::CustomCursor;
 pub use error::{CookieExt as _, PlatformError};
 pub(crate) type Result<T> = std::result::Result<T, PlatformError>;
 

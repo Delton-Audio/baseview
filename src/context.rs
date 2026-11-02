@@ -1,6 +1,6 @@
 use super::*;
 use crate::dpi::Size;
-use crate::{platform, MouseCursor, WindowSize};
+use crate::{platform, CursorImages, CustomCursor, MouseCursor, WindowSize};
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
@@ -21,6 +21,22 @@ impl WindowContext {
     /// Sets the [`MouseCursor`] icon to be displayed when the mouse cursor hovers this window.
     pub fn set_mouse_cursor(&self, mouse_cursor: MouseCursor) -> Result<(), Error> {
         self.inner.set_mouse_cursor(mouse_cursor)?;
+        Ok(())
+    }
+
+    /// Builds a cursor from images, one per scale, for this window's platform. Keep it and pass it to
+    /// [`Self::set_custom_cursor`] as often as needed; building is the expensive part.
+    pub fn create_custom_cursor(&self, images: &CursorImages) -> Result<CustomCursor, Error> {
+        Ok(CustomCursor::new(self.inner.create_custom_cursor(images)?))
+    }
+
+    /// Shows `cursor` while the pointer is over this window, like [`Self::set_mouse_cursor`] does for a system cursor.
+    ///
+    /// The image used is the one for the window's current scale ([`CursorImages::for_scale`]), re-chosen each time
+    /// the platform asks for the cursor, so a move to a screen of another scale picks the matching image. A later
+    /// `set_mouse_cursor` replaces it.
+    pub fn set_custom_cursor(&self, cursor: &CustomCursor) -> Result<(), Error> {
+        self.inner.set_custom_cursor(cursor)?;
         Ok(())
     }
 

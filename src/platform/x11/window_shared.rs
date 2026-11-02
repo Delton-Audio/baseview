@@ -7,7 +7,9 @@ use crate::platform::x11::xcb_connection::get_size_hints;
 use crate::platform::x11::xcb_window::XcbWindow;
 use crate::platform::*;
 use crate::utils::SizingStrategy;
-use crate::{warn, MouseCursor, WindowHandler, WindowSettings, WindowSize};
+use crate::{
+    warn, CursorImages, CustomCursor, MouseCursor, WindowHandler, WindowSettings, WindowSize,
+};
 use calloop::LoopSignal;
 use raw_window_handle::{DisplayHandle, XlibWindowHandle};
 use std::cell::Cell;
@@ -54,7 +56,8 @@ pub(crate) struct WindowInner {
 
     window_size: Cell<PhysicalSize<u16>>,
     pub(crate) sizing_strategy: SizingStrategy,
-    mouse_cursor: Cell<MouseCursor>,
+    /// The system cursor last set, or `None` before one is, and after a custom cursor was set.
+    mouse_cursor: Cell<Option<MouseCursor>>,
     pub(crate) visual_id: Visualid,
 
     pub(crate) is_focused: Cell<bool>,
@@ -144,7 +147,7 @@ impl WindowInner {
                 suggested: options.fallback_scale_factor.into(),
             },
             sizing_strategy,
-            mouse_cursor: MouseCursor::default().into(),
+            mouse_cursor: Some(MouseCursor::default()).into(),
             loop_signal: ev_loop.get_signal(),
 
             is_focused: false.into(),
@@ -159,7 +162,7 @@ impl WindowInner {
     }
 
     pub fn set_mouse_cursor(&self, mouse_cursor: MouseCursor) -> Result<()> {
-        if self.mouse_cursor.get() == mouse_cursor {
+        if self.mouse_cursor.get() == Some(mouse_cursor) {
             return Ok(());
         }
 
@@ -175,7 +178,28 @@ impl WindowInner {
                 .check()?;
         }
 
-        self.mouse_cursor.set(mouse_cursor);
+        self.mouse_cursor.set(Some(mouse_cursor));
+
+        Ok(())
+    }
+
+    pub fn create_custom_cursor(&self, images: &CursorImages) -> Result<super::CustomCursor> {
+        super::CustomCursor::create(&self.connection.conn, images)
+    }
+
+    pub fn set_custom_cursor(&self, cursor: &CustomCursor) -> Result<()> {
+        if let Some(xid) = cursor.platform().for_scale(self.scale_factor()) {
+            self.connection
+                .conn
+                .change_window_attributes(
+                    self.xcb_window.id().get(),
+                    &ChangeWindowAttributesAux::new().cursor(xid),
+                )?
+                .check()?;
+        }
+
+        // A later `set_mouse_cursor` of any system cursor must be applied.
+        self.mouse_cursor.set(None);
 
         Ok(())
     }

@@ -1,3 +1,4 @@
+mod cursor;
 mod dpi;
 mod drop_target;
 mod error;
@@ -8,6 +9,7 @@ mod window_state;
 
 use crate::wrappers::win32::h_instance::HInstance;
 use crate::wrappers::win32::window::HWnd;
+pub use cursor::CustomCursor;
 pub(crate) use dpi::DpiScalingStrategy;
 pub use error::{PlatformError, Result};
 use raw_window_handle::{

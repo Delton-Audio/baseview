@@ -22,7 +22,6 @@ use crate::host::Host;
 use crate::platform::win::window_state::{WindowSharedState, WindowState};
 use crate::platform::PlatformError;
 use crate::window::WindowInitializer;
-use crate::wrappers::win32::cursor::SystemCursor;
 use crate::wrappers::win32::window::*;
 use crate::wrappers::win32::{
     monitor_frame_interval_ms, ole_initialize, run_thread_message_loop_until, Dpi,
@@ -758,9 +757,7 @@ unsafe fn wnd_proc_inner(
             let mouse_in_window = low_word == HTCLIENT;
             if mouse_in_window {
                 // Here we need to set the cursor back to what the state says, since it can have changed when outside the window
-                if let Ok(cursor) = SystemCursor::load(window_state.cursor_icon.get()) {
-                    cursor.set()
-                }
+                window_state.apply_cursor();
                 Some(1)
             } else {
                 // Cursor is being changed by some other window, e.g. when having mouse on the borders to resize it

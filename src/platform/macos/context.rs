@@ -1,4 +1,5 @@
 use crate::dpi::Size;
+use crate::platform::macos::cursor::CustomCursor as PlatformCustomCursor;
 use crate::platform::macos::view::BaseviewView;
 use crate::platform::Result;
 use crate::platform::{PlatformHandle, WindowSharedState};
@@ -76,6 +77,19 @@ impl WindowContext {
         let Some(view) = view.inner_ref() else { return Ok(()) };
 
         view.inner.cursor_manager.set_cursor(cursor);
+
+        Ok(())
+    }
+
+    pub fn create_custom_cursor(&self, images: &CursorImages) -> Result<PlatformCustomCursor> {
+        PlatformCustomCursor::create(images)
+    }
+
+    pub fn set_custom_cursor(&self, cursor: &CustomCursor) -> Result<()> {
+        let Some(view) = self.view.load() else { return Ok(()) };
+        let Some(view) = view.inner_ref() else { return Ok(()) };
+
+        view.inner.cursor_manager.set_custom(cursor.platform().retained());
 
         Ok(())
     }

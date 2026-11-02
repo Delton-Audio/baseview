@@ -55,6 +55,7 @@ pub enum PlatformError {
     Calloop(calloop::Error),
     RequestFromMainThreadFailed(RequestFailed),
     SendMainThread,
+    CustomCursorUnsupported,
     #[cfg(feature = "opengl")]
     XLib(crate::wrappers::xlib::XLibError),
     #[cfg(feature = "opengl")]
@@ -83,6 +84,9 @@ impl Display for PlatformError {
             PlatformError::Calloop(e) => e.fmt(f),
             PlatformError::RequestFromMainThreadFailed(e) => e.fmt(f),
             PlatformError::SendMainThread => FatalError::SendMainThread.fmt(f),
+            PlatformError::CustomCursorUnsupported => {
+                f.write_str("The X server has no 32 bit ARGB RENDER format, which custom cursors need")
+            }
             #[cfg(feature = "opengl")]
             PlatformError::XLib(e) => e.fmt(f),
             #[cfg(feature = "opengl")]

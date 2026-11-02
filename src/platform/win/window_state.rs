@@ -9,12 +9,18 @@ use crate::wrappers::win32::h_instance::HInstance;
 use crate::wrappers::win32::window::HWnd;
 use crate::wrappers::win32::{Dpi, DpiAwarenessGuard, ExtendedUser32, LibraryModule};
 use crate::WindowSettings;
-use crate::{MouseCursor, WindowSize};
+use crate::{CursorImages, CustomCursor, MouseCursor, WindowSize};
 use raw_window_handle::{DisplayHandle, Win32WindowHandle};
 use std::cell::{Cell, Ref, RefCell};
 use std::num::NonZeroIsize;
 use std::rc::Rc;
 use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
+
+/// What the cursor over the window's client area shows.
+pub(crate) enum CursorState {
+    System(MouseCursor),
+    Custom(CustomCursor),
+}
 
 /// All data associated with the window.
 pub(crate) struct WindowState {
@@ -23,7 +29,7 @@ pub(crate) struct WindowState {
     pub keyboard_state: RefCell<KeyboardState>,
     pub mouse_button_counter: Cell<usize>,
     pub mouse_was_outside_window: Cell<bool>,
-    pub cursor_icon: Cell<MouseCursor>,
+    pub cursor_state: RefCell<CursorState>,
     /// Whether a `BV_REQUEST_FRAME` is posted and not yet serviced.
     ///
     /// Purely a de-duplicator: `request_frame` is called from `on_frame` itself, so an animating
@@ -48,7 +54,7 @@ impl WindowState {
             keyboard_state: RefCell::new(KeyboardState::new()),
             mouse_button_counter: Cell::new(0),
             mouse_was_outside_window: true.into(),
-            cursor_icon: Cell::new(MouseCursor::Default),
+            cursor_state: RefCell::new(CursorState::System(MouseCursor::Default)),
             frame_requested: Cell::new(false),
             user32,
             shared,
@@ -130,12 +136,35 @@ impl WindowState {
     }
 
     pub fn set_mouse_cursor(&self, mouse_cursor: MouseCursor) -> Result<(), super::PlatformError> {
-        self.cursor_icon.set(mouse_cursor);
-        if let Ok(cursor) = SystemCursor::load(mouse_cursor) {
-            cursor.set()
-        }
+        *self.cursor_state.borrow_mut() = CursorState::System(mouse_cursor);
+        self.apply_cursor();
 
         Ok(())
+    }
+
+    pub fn create_custom_cursor(
+        &self, images: &CursorImages,
+    ) -> Result<super::CustomCursor, super::PlatformError> {
+        super::CustomCursor::create(images)
+    }
+
+    pub fn set_custom_cursor(&self, cursor: &CustomCursor) -> Result<(), super::PlatformError> {
+        *self.cursor_state.borrow_mut() = CursorState::Custom(cursor.clone());
+        self.apply_cursor();
+
+        Ok(())
+    }
+
+    /// Makes Windows show the cursor this state holds, the custom one in the image for the current scale.
+    pub fn apply_cursor(&self) {
+        match &*self.cursor_state.borrow() {
+            CursorState::System(mouse_cursor) => {
+                if let Ok(cursor) = SystemCursor::load(*mouse_cursor) {
+                    cursor.set()
+                }
+            }
+            CursorState::Custom(cursor) => cursor.platform().set(self.scale_factor()),
+        }
     }
 
     #[cfg(feature = "opengl")]
