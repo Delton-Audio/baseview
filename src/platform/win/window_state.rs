@@ -198,6 +198,9 @@ pub struct WindowSharedState {
     /// `Some` for an owned popup (see `Window::create_owned_popup`): the window that owns it. An
     /// owned popup never takes activation or focus, so it never dismisses itself on focus loss.
     pub popup_owner: Cell<Option<HWnd>>,
+    /// `true` for a tooltip (see `Window::create_tooltip`): an unowned popup that never takes
+    /// activation or focus and that the pointer passes through.
+    pub tooltip: Cell<bool>,
     pub is_alive: Cell<bool>,
     pub current_size: Cell<PhysicalSize<u32>>,
     pub current_dpi: Cell<Option<Dpi>>, // None if Win32 HiDPI isn't supported
@@ -216,6 +219,7 @@ impl WindowSharedState {
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
             popup_position: None.into(),
             popup_owner: None.into(),
+            tooltip: false.into(),
             is_alive: true.into(),
             current_dpi: None.into(),
             current_size: settings.size.to_physical(1.0).into(),

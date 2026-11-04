@@ -152,6 +152,35 @@ impl Window {
         })
     }
 
+    /// Creates a borderless TOOLTIP window at the given screen position in physical pixels, and shows it
+    /// immediately WITHOUT activating it.
+    ///
+    /// For a tooltip (an HTML `title`): it never takes activation or keyboard focus, not even when clicked,
+    /// and the pointer passes through it to the window beneath (`WM_NCHITTEST` answers `HTTRANSPARENT`), so
+    /// it never receives mouse input and never steals hover from the window it describes. It stays above other
+    /// windows (`WS_EX_TOPMOST`) and off the taskbar. It is not owned by anything and does not dismiss itself;
+    /// the caller closes it (drop the returned [`Window`], or `request_close` from its handler).
+    ///
+    /// `settings.parent` and `settings.wait_for_parent` are ignored.
+    ///
+    /// Currently only implemented on Windows.
+    #[cfg(target_os = "windows")]
+    pub fn create_tooltip<H: WindowHandler>(
+        position: PhysicalPosition<i32>, settings: WindowSettings,
+        handler: impl FnOnce(WindowContext) -> Result<H, HandlerError> + Send + 'static,
+    ) -> Result<Window, Error> {
+        let initializer = WindowInitializer {
+            settings,
+            builder: WindowHandlerBuilder::new(handler),
+            host: Host::default(),
+        };
+
+        Ok(Self {
+            inner: platform::WindowHandle::create_tooltip(initializer, position)?,
+            phantom: PhantomData,
+        })
+    }
+
     /// Blocks the thread and runs an event loop until the window is closed.
     ///
     /// The window is shown automatically if it wasn't already.

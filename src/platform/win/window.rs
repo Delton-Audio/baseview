@@ -227,14 +227,15 @@ impl BaseviewWindow {
     pub fn create(shared_state: Rc<WindowSharedState>, init: WindowInitializer) -> Result<HWnd> {
         let popup_position = shared_state.popup_position.get();
         let popup_owner = shared_state.popup_owner.get();
+        let tooltip = shared_state.tooltip.get();
         shared_state.init(&init);
 
-        let style = if popup_position.is_some() {
-            if popup_owner.is_some() {
-                WindowStyle::owned_popup()
-            } else {
-                WindowStyle::popup()
-            }
+        let style = if popup_position.is_some() && tooltip {
+            WindowStyle::tooltip()
+        } else if popup_position.is_some() && popup_owner.is_some() {
+            WindowStyle::owned_popup()
+        } else if popup_position.is_some() {
+            WindowStyle::popup()
         } else {
             WindowStyle::from_settings(&init.settings)
         };
@@ -387,8 +388,11 @@ impl WindowImpl for BaseviewWindow {
                     &window_state.shared.user32,
                     self.shared_state.dpi_scaling_strategy.get(),
                 )?;
-                if window_state.shared.popup_owner.get().is_some() {
-                    // DPI correction during creation must not steal focus from the owner.
+                if window_state.shared.popup_owner.get().is_some()
+                    || window_state.shared.tooltip.get()
+                {
+                    // DPI correction during creation must not steal focus from the owner (or,
+                    // for a tooltip, from whatever has it).
                     let style = window.get_style()?;
                     let rect = guard.client_area_to_nc_area(new_size.into(), style, Some(dpi))?;
                     window.resize_nc_without_activating(rect.size())?;
@@ -528,7 +532,9 @@ unsafe fn wnd_proc_inner(
                         // Take keyboard focus on click. Without this a parented plugin editor
                         // never receives keyboard input, because the host's window keeps focus
                         // when the user clicks into the editor.
-                        if window_state.shared.popup_owner.get().is_none() {
+                        if window_state.shared.popup_owner.get().is_none()
+                            && !window_state.shared.tooltip.get()
+                        {
                             let _ = window.set_focus();
                         }
 
@@ -634,6 +640,7 @@ unsafe fn wnd_proc_inner(
             // directly so the close still runs after the handler returns.
             if window_state.shared.popup_position.get().is_some()
                 && window_state.shared.popup_owner.get().is_none()
+                && !window_state.shared.tooltip.get()
             {
                 window_state.request_close();
             }
@@ -641,8 +648,17 @@ unsafe fn wnd_proc_inner(
             None
         }
         WM_MOUSEACTIVATE => {
-            if window_state.shared.popup_owner.get().is_some() {
+            if window_state.shared.popup_owner.get().is_some() || window_state.shared.tooltip.get()
+            {
                 Some(MA_NOACTIVATE as LRESULT)
+            } else {
+                None
+            }
+        }
+        WM_NCHITTEST => {
+            // A tooltip is click-through: the pointer belongs to the window beneath it.
+            if window_state.shared.tooltip.get() {
+                Some(HTTRANSPARENT as LRESULT)
             } else {
                 None
             }
@@ -882,6 +898,22 @@ impl WindowHandle {
         let shared_state = WindowSharedState::new(extended_user_32, &init.settings);
         shared_state.popup_position.set(Some(position));
         shared_state.popup_owner.set(Some(owner_hwnd));
+        let window = BaseviewWindow::create(Rc::clone(&shared_state), init)?;
+
+        window.show_without_activating();
+
+        Ok(WindowHandle { hwnd: Some(window).into(), state: shared_state, init: None.into() })
+    }
+
+    pub fn create_tooltip(
+        mut init: WindowInitializer, position: PhysicalPosition<i32>,
+    ) -> Result<WindowHandle> {
+        init.settings.parent = None;
+        init.settings.wait_for_parent = false;
+        let extended_user_32 = LibraryModule::load()?;
+        let shared_state = WindowSharedState::new(extended_user_32, &init.settings);
+        shared_state.popup_position.set(Some(position));
+        shared_state.tooltip.set(true);
         let window = BaseviewWindow::create(Rc::clone(&shared_state), init)?;
 
         window.show_without_activating();
